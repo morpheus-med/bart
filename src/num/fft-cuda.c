@@ -1,9 +1,9 @@
-/* Copyright 2013. The Regents of the University of California.
- * All rights reserved. Use of this source code is governed by 
+/* Copyright 2013, 2015. The Regents of the University of California.
+ * All rights reserved. Use of this source code is governed by
  * a BSD-style license which can be found in the LICENSE file.
  *
  * Authors:
- * 2012-2013 Martin Uecker <uecker@eecs.berkeley.edu>
+ * 2012-2013, 2015 Martin Uecker <uecker@eecs.berkeley.edu>
  *
  *
  * Internal interface to the CUFFT library used in fft.c.
@@ -90,7 +90,8 @@ struct fft_cuda_plan_s* fft_cuda_plan(unsigned int D, const long dimensions[D], 
 		}
 	}
 
-	assert(k <= 3);
+	assert(k > 0);
+
 	int cudims[k];
 	int cuiemb[k];
 	int cuoemb[k];
@@ -99,21 +100,23 @@ struct fft_cuda_plan_s* fft_cuda_plan(unsigned int D, const long dimensions[D], 
 	long batchistr[l];
 	long batchostr[l];
 
-	int lis = 1;
-	int los = 1;
+	int lis = dims[0].is;
+	int los = dims[0].os;
+
+	if (k > 3)
+		goto errout;
 
 	for (unsigned int i = 0; i < k; i++) {
 
-		assert(0 == dims[i].is % lis);
-		assert(0 == dims[i].os % los);
+		assert(dims[i].is == lis);
+		assert(dims[i].os == los);
 
 		cudims[k - 1 - i] = dims[i].n;
-
-		cuiemb[k - 1 - i] = dims[i].n * dims[i].is;
-		cuoemb[k - 1 - i] = dims[i].n * dims[i].os;
+		cuiemb[k - 1 - i] = dims[i].n;
+		cuoemb[k - 1 - i] = dims[i].n;
 	
-		lis = dims[i].is;
-		los = dims[i].os;
+		lis = dims[i].n * dims[i].is;
+		los = dims[i].n * dims[i].os;
 	}
 
 	for (unsigned int i = 0; i < l; i++) {
@@ -124,46 +127,60 @@ struct fft_cuda_plan_s* fft_cuda_plan(unsigned int D, const long dimensions[D], 
 		batchostr[i] = hmdims[i].os;
 	}
 
+	int istride = dims[0].is;
+	int ostride = dims[0].os;
+	int idist = lis;
+	int odist = los;
+	int cubs = 1;
 
-	unsigned int batchsize = md_calc_size(l, batchdims);
 
 	// check that batch dimensions can be collapsed to one
 
-	assert(l == md_calc_blockdim(l, batchdims, batchistr, hmdims[0].is));
-	assert(l == md_calc_blockdim(l, batchdims, batchostr, hmdims[0].os));
+	unsigned int bi = md_calc_blockdim(l, batchdims, batchistr, hmdims[0].is);
+	unsigned int bo = md_calc_blockdim(l, batchdims, batchostr, hmdims[0].os);
 
-	int idist = cuiemb[0];
-	int odist = cuoemb[0];
-	int istride = cuiemb[k - 1] / cudims[k - 1];
-	int ostride = cuoemb[k - 1] / cudims[k - 1];
-	int cubs = 1;
+	if (bi != bo)
+		goto errout;
 
-	if (l > 0) {
-#if 1
+	if (bi > 0) {
+
 		idist = hmdims[0].is;
 		odist = hmdims[0].os;
-		cubs = batchsize;
-#else
-		plan->idist = hmdims[0].is;
-		plan->odist = hmdims[0].os;
-		plan->batch = batchsize;
-#endif
+		cubs = md_calc_size(bi, batchdims);
 	}
 
-	assert((2 == k) && (1 == istride) && (1 == ostride));
+	if (l != bi) {
+
+		// check that batch dimensions can be collapsed to one
+
+		if (l - bi != md_calc_blockdim(l - bi, batchdims + bi, batchistr + bi, hmdims[bi].is))
+			goto errout;
+
+		if (l - bo != md_calc_blockdim(l - bo, batchdims + bo, batchostr + bo, hmdims[bo].os))
+			goto errout;
+
+		plan->idist = hmdims[bi].is;
+		plan->odist = hmdims[bo].os;
+		plan->batch = md_calc_size(l - bi, batchdims + bi);
+	}
+
+	assert(k <= 3);
 
 	int err;
 
 	#pragma omp critical
-	if (CUFFT_SUCCESS != (err = cufftPlanMany(&plan->cufft, k,
+	err = cufftPlanMany(&plan->cufft, k,
 				cudims, cuiemb, istride, idist,
-				        cuoemb, ostride, odist, CUFFT_C2C, cubs))) {
+				        cuoemb, ostride, odist, CUFFT_C2C, cubs);
 
-		fprintf(stderr, "CUFFT: %d\n", err);
-		abort();
-	}
+	if (CUFFT_SUCCESS != err)
+		goto errout;
 
 	return plan;
+
+errout:
+	free(plan);
+	return NULL;
 }
 
 
@@ -188,11 +205,8 @@ void fft_cuda_exec(struct fft_cuda_plan_s* cuplan, complex float* dst, const com
 		if (CUFFT_SUCCESS != (err = cufftExecC2C(cuplan->cufft,
 							(cufftComplex*)src + i * cuplan->idist,
 							(cufftComplex*)dst + i * cuplan->odist,
-							(!cuplan->backwards) ? CUFFT_FORWARD : CUFFT_INVERSE))) {
-
-			fprintf(stderr, "CUFFT: %d\n", err);
-			abort();
-		}
+							(!cuplan->backwards) ? CUFFT_FORWARD : CUFFT_INVERSE)))
+			error("CUFFT: %d\n", err);
 	}
 }
 

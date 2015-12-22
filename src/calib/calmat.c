@@ -132,7 +132,7 @@ complex float* calibration_matrix_mask2(long calmat_dims[2], const long kdims[3]
 
 
 
-
+#if 0
 static void circular_patch_mask(const long kdims[3], unsigned int channels, complex float mask[channels * md_calc_size(3, kdims)])
 {
 	long kpos[3] = { 0 };
@@ -151,8 +151,8 @@ static void circular_patch_mask(const long kdims[3], unsigned int channels, comp
 			mask[((c * kdims[2] + kpos[2]) * kdims[1] + kpos[1]) * kdims[0] + kpos[0]] = (dist <= 0.5) ? 1 : 0;
 
 	} while (md_next(3, kdims, 1 | 2 | 4, kpos));
-
 }
+#endif
 
 void covariance_function(const long kdims[3], unsigned int N, complex float cov[N][N], const long calreg_dims[4], const complex float* data)
 {
@@ -184,6 +184,10 @@ void calmat_svd(const long kdims[3], unsigned int N, complex float cov[N][N], fl
 	assert(N == calmat_dims[1]);
 
 	complex float (*U)[L] = xmalloc(L * L * CFL_SIZE);
+
+	// initialize to zero in case L < N not all written to
+	for (unsigned int i = 0; i < N; i++)
+		S[i] = 0.;
 
 	lapack_svd_econ(L, N, U, cov, S, MD_CAST_ARRAY2(complex float, 2, calmat_dims, cm, 0, 1));
 
