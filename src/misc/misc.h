@@ -15,6 +15,7 @@
 #define UNUSED(x) (void)(x)
 
 #define MAKE_ARRAY(x, ...) ((__typeof__(x)[]){ x, __VA_ARGS__ })
+#define ARRAY_SIZE(x)	(sizeof(x) / sizeof(x[0]))
 
 #ifdef __cplusplus
 extern "C" {
@@ -50,6 +51,9 @@ extern void print_int(unsigned int D, const int arr[__VLA(D)]);
 extern void print_complex(unsigned int D, const _Complex float arr[__VLA(D)]);
 
 extern unsigned int bitcount(unsigned int flags);
+
+extern const char* command_line;
+extern void save_command_line(int argc, char* argv[__VLA(argc)]);
 
 #ifdef __cplusplus
 }

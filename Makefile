@@ -3,6 +3,8 @@
 # All rights reserved. Use of this source code is governed by
 # a BSD-style license which can be found in the LICENSE file.
 
+# we have a two stage Makefile
+MAKESTAGE ?= 1
 
 # silent make
 #MAKEFLAGS += --silent
@@ -15,7 +17,6 @@ AR=./ar_lock.sh
 
 CUDA?=0
 ACML?=0
-GSL?=1
 OMP?=1
 SLINK?=0
 DEBUG?=0
@@ -60,11 +61,11 @@ ALLDEPS = $(shell find $(srcdir) -name ".*.d")
 # Compilation flags
 
 OPT = -O3 -ffast-math
-CPPFLAGS = $(DEPFLAG) -Wall -Wextra -I$(srcdir)/
-CFLAGS = $(OPT) -std=c99 -Wmissing-prototypes -I$(srcdir)/
-CXXFLAGS = $(OPT) -I$(srcdir)/
-CC = gcc
-CXX = g++
+CPPFLAGS ?= -Wall -Wextra
+CFLAGS ?= $(OPT) -Wmissing-prototypes
+CXXFLAGS ?= $(OPT)
+CC ?= gcc
+CXX ?= g++
 
 
 ifeq ($(BUILDTYPE), MacOSX)
@@ -76,13 +77,6 @@ endif
 
 cuda.top ?= /usr/
 
-# GSL
-
-gsl.top ?= /usr/
-
-ifeq ($(BUILDTYPE), MacOSX)
-gsl.top = /opt/local
-endif
 
 # BLAS/LAPACK
 
@@ -107,7 +101,7 @@ ismrm.top ?= /usr/local/ismrmrd/
 # Main build targets
 
 TBASE=show slice crop resize join transpose zeros ones flip circshift extract repmat bitmask reshape version
-TFLP=scale conj fmac saxpy sdot spow cpyphs creal normalize cdf97 relnorm pattern nrmse
+TFLP=scale conj fmac saxpy sdot spow cpyphs creal normalize cdf97 pattern nrmse mip
 TNUM=fft fftmod fftshift noise bench threshold conv rss filter
 TRECO=pics pocsense rsense bpsense itsense nlinv nufft rof sake wave lrmatrix estdims
 TCALIB=ecalib ecaltwo caldir walsh cc calmat svd estvar
@@ -118,7 +112,7 @@ BTARGETS = $(TBASE) $(TFLP) $(TNUM) $(TIO)
 XTARGETS = $(TRECO) $(TCALIB) $(TMRI) $(TSIM)
 YTARGETS = $(BTARGETS) $(XTARGETS)
 ZTARGETS = bbox bart $(XTARGETS)
-TARGETS = sense bart $(BTARGETS) $(XTARGETS)
+TARGETS = bart $(BTARGETS) $(XTARGETS)
 
 
 
@@ -162,14 +156,23 @@ CFLAGS += -g
 endif
 
 
-
-
 ifeq ($(PARALLEL),1)
-.PHONY: all $(MAKECMDGOALS)
-all $(MAKECMDGOALS):
-	echo Parallel build.
-	make PARALLEL=2 -j $(MAKECMDGOALS)
+MAKEFLAGS += -j
+endif
+
+
+ifeq ($(MAKESTAGE),1)
+.PHONY: doc/commands.txt $(TARGETS) ismrmrd
+default all clean allclean distclean doc/commands.txt $(TARGETS) ismrmrd:
+	make MAKESTAGE=2 $(MAKECMDGOALS)
 else
+
+
+CPPFLAGS += $(DEPFLAG) -I$(srcdir)/
+CFLAGS += -std=c99 -I$(srcdir)/
+CXXFLAGS += -I$(srcdir)/
+
+
 
 
 default: bart doc/commands.txt .gitignore
@@ -219,17 +222,6 @@ endif
 
 
 
-# GSL
-
-ifeq ($(BUILDTYPE), MacOSX)
-GSL_H := -I$(gsl.top)/include
-GSL_L := -L$(gsl.top)/lib -lgsl -lgslcblas
-else
-GSL_H := 
-GSL_L := -lgsl -lgslcblas
-endif
-
-
 # BLAS/LAPACK
 
 BLAS_H :=
@@ -249,9 +241,6 @@ endif
 
 
 
-ifeq ($(GSL),1)
-CPPFLAGS += -DUSE_GSL $(GSL_H) $(BLAS_H)
-endif
 
 CPPFLAGS += $(FFTW_H)
 
@@ -326,7 +315,7 @@ doc/commands.txt: bart
 		printf "\n\n--%s--\n\n" $$cmd ;	\
 		 ./bart $$cmd -h ;		\
 	done >> doc/commands.new
-	./update-if-changed.sh doc/commands.new doc/commands.txt
+	$(root)/rules/update-if-changed.sh doc/commands.new doc/commands.txt
 
 
 all: .gitignore $(TARGETS)
@@ -354,9 +343,6 @@ mat2cfl: $(srcdir)/mat2cfl.c -lnum -lmisc
 
 
 
-sense: pics
-	rm -f $@ && $(MYLINK) pics $@
-
 
 $(BTARGETS): bbox
 	rm -f $@ && $(MYLINK) bbox $@
@@ -370,21 +356,28 @@ $(BTARGETS): bbox
 %.o: %.cc
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c -o $@ $<
 
+ifeq ($(PARALLEL),1)
+(%): %
+	$(AR) r $@ $%
+else
 (%): %
 	$(AR) r $@ $%
 	rm $%
+endif
+
 
 # we add the rm because intermediate files are not deleted
 # automatically for some reason
+# (but it produces errors for parallel builds for make all)
+
 
 
 .SECONDEXPANSION:
 $(ZTARGETS): % : src/main.c $(srcdir)/%.o $$(MODULES_%) $(MODULES)
-	$(CC) $(LDFLAGS) $(CFLAGS) -Dmain_real=main_$@ -o $@ $+ $(FFTW_L) $(CUDA_L) $(BLAS_L) $(GSL_L) $(PNG_L) -lm
+	$(CC) $(LDFLAGS) $(CFLAGS) -Dmain_real=main_$@ -o $@ $+ $(FFTW_L) $(CUDA_L) $(BLAS_L) $(PNG_L) -lm
 #	rm $(srcdir)/$@.o
 
 
-.PHONY: clean allclean distclean
 clean:
 	rm -f `find $(srcdir) -name "*.o"`
 	rm -f $(root)/lib/.*.lock
@@ -397,18 +390,19 @@ allclean: clean
 distclean: allclean
 
 
+endif	# MAKESTAGE
+
+
 install: bart $(root)/doc/commands.txt
 	install -d $(DESTDIR)/usr/bin/
 	install bart $(DESTDIR)/usr/bin/
 	install -d $(DESTDIR)/usr/share/doc/bart/
 	install $(root)/doc/*.txt $(root)/README $(DESTDIR)/usr/share/doc/bart/
+	install -d $(DESTDIR)/usr/lib/bart/commands/
 
 
 # generate release tar balls (identical to github)
 %.tar.gz:
 	git archive --prefix=bart-$(patsubst bart-%.tar.gz,%,$@)/ -o $@ v$(patsubst bart-%.tar.gz,%,$@)
-
-
-endif	#PARALLEL
 
 

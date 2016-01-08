@@ -1,10 +1,10 @@
 /* Copyright 2015. The Regents of the University of California.
- * Copyright 2015. Martin Uecker.
+ * Copyright 2015-2016. Martin Uecker.
  * All rights reserved. Use of this source code is governed by
  * a BSD-style license which can be found in the LICENSE file.
  * 
  * Authors:
- * 2014-2015 Martin Uecker <martin.uecker@med.uni-goettingen.de>
+ * 2014-2016 Martin Uecker <martin.uecker@med.uni-goettingen.de>
  */
 
 #include <stdlib.h>
@@ -60,13 +60,21 @@ int main_bart(int argc, char* argv[])
 			exit(1);
 		}
 
-		char* tpath = getenv("TOOLBOX_PATH");
+		const char* tpath[3] = {
 
-		if (NULL != tpath) {
+			getenv("TOOLBOX_PATH"),
+			"/usr/lib/bart/commands/",
+			"/usr/local/lib/bart/commands/",
+		};
 
-			size_t len = strlen(tpath) + strlen(argv[1]) + 2;
-			char* cmd = malloc(len);
-			size_t r = snprintf(cmd, len, "%s/%s", tpath, argv[1]);
+		for (unsigned int i = 0; i < ARRAY_SIZE(tpath); i++) {
+
+			if (NULL == tpath[i])
+				continue;
+
+			size_t len = strlen(tpath[i]) + strlen(argv[1]) + 2;
+			char* cmd = xmalloc(len);
+			size_t r = snprintf(cmd, len, "%s/%s", tpath[i], argv[1]);
 			assert(r < len);
 
 			if (-1 == execv(cmd, argv + 1)) {
